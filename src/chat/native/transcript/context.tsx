@@ -10,10 +10,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react';
 
 import type { RustChat } from '../../rust/useRustChat';
+import { chatMachineLink } from '../../rust/machine-link';
 import type { ChatDocument, Json } from '../../rust/document';
 import { arr, obj, str, type JsonRecord } from './json';
 import { openChatImageViewer } from '../cards/overlayStore';
 import { DisclosureStore, RowDetailDemand } from './state';
+import type { RenderMath } from './markdown/math';
 import type { TranscriptTheme } from './theme';
 
 /** A picture as the document projects it (`transport`, `path`, `url`, `label`, `alt`). */
@@ -37,7 +39,12 @@ export type NativeChatUi = {
    * gx-chat-core `transcript/pictures.rs`); `fallback` is the list it opens on when the core cannot answer.
    */
   openPicture(image: ChatImageSource, fallback: readonly ChatImageSource[], index: number): void;
+  /** Typesets formulas on the chat's computer (`/api/renderMath`) for the Markdown (`markdown/math.ts`). */
+  renderMath: RenderMath;
 };
+
+/** First typesetting starts gxserver's Typst engine, which takes a moment. */
+const RENDER_MATH_TIMEOUT_MS = 20_000;
 
 const UiContext = createContext<NativeChatUi | null>(null);
 
@@ -97,9 +104,20 @@ export function NativeChatUiProvider({ chat, children }: { chat: RustChat; child
         else openChatImageViewer(fallback, index);
       });
   }, []);
+  const machineRef = useRef(chat.machine);
+  machineRef.current = chat.machine;
+  // Over the warm link only: an older Ghostex (the exec route) has no typesetting, and its formulas stay text.
+  const renderMath = useCallback<RenderMath>(async (params) => {
+    const machine = machineRef.current;
+    if (machine === null) return null;
+    const link = chatMachineLink(machine);
+    if ((await link.route()) !== 'socket') return null;
+    const answer = await link.rpc('renderMath', params, RENDER_MATH_TIMEOUT_MS);
+    return answer.error === null ? obj(answer.result) : null;
+  }, []);
   const value = useMemo<NativeChatUi>(
-    () => ({ disclosures, demand, requestImage, renderVisual, renderVisualAsync, openPicture }),
-    [demand, disclosures, requestImage, renderVisual, renderVisualAsync, openPicture],
+    () => ({ disclosures, demand, requestImage, renderVisual, renderVisualAsync, openPicture, renderMath }),
+    [demand, disclosures, requestImage, renderVisual, renderVisualAsync, openPicture, renderMath],
   );
   return <UiContext.Provider value={value}>{children}</UiContext.Provider>;
 }

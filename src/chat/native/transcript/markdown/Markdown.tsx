@@ -3,14 +3,16 @@
  * React chat's prose styles (packages/core-ui/styles/chat.css, `.ghostex-chat-markdown`), the way
  * desktop's `rich_markdown.rs`, `markdown_style.rs`, `markdown_links.rs` and `code_block.rs` lay
  * them out. Links and file references dispatch `openMarkdownLink`, the action desktop sends.
+ * Formulas are typeset by gxserver (`math.ts`, desktop `math_text.rs`).
  */
 
 import * as Clipboard from 'expo-clipboard';
 import { memo, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type TextStyle } from 'react-native';
+import { SvgXml } from 'react-native-svg';
 
 import { openChatTablePreview, tableCsv } from '../../cards';
-import { useTranscriptEnv } from '../context';
+import { useOptionalNativeChatUi, useTranscriptEnv } from '../context';
 import { Glyph, type GlyphName } from '../icons';
 import { arr, obj, str, type JsonRecord } from '../json';
 import { CODE_SIZE, MONO_FONT, PROSE_LINE, PROSE_SIZE, type TranscriptTheme } from '../theme';
@@ -25,6 +27,7 @@ import { BlockLongPress } from './blockLongPress';
 import { isRunCommandHref } from './runCommands';
 import { fitTableColumns } from './tableLayout';
 import { MarkedSection, useMarkedEmoji, useMarkedStyle } from './MarkedSections';
+import { mathColor, useMathLookup, type MathFormula, type MathLookup } from './math';
 
 type Reference = { label: string; kind: string; state: string; title: string };
 
@@ -42,6 +45,11 @@ type InlineContext = {
   strips: boolean;
   /** The heading colour (levels 1 to 5): the theme's `primary` unless the row's lane sets one. */
   heading: string;
+  /** Typeset formulas, or null where formulas stay the text they were written as (`math.ts`). */
+  math: MathLookup | null;
+  /** The colour and size of the text being drawn, which its formulas are typeset in. */
+  color: string;
+  size: number;
 };
 
 function referenceMap(references: unknown): Map<string, Reference> {
@@ -128,6 +136,11 @@ function renderInlines(
       case 'image':
         // Pictures are split out of their paragraph before this runs (`FlowParagraph`).
         return str(inline.image, 'label');
+      case 'math': {
+        const formula = typesetFormula(context, inline.latex, inline.display);
+        if (formula === null) return highlightText(inline.source, context.find, key, style);
+        return <InlineFormula key={key} formula={formula} label={inline.latex} />;
+      }
       case 'link': {
         // An inline command stays the code it was written as; the phone runs it from the message's
         // long-press menu (`runCommands.ts`), never from a button on the message.
@@ -170,6 +183,60 @@ function renderInlines(
       }
     }
   });
+}
+
+function typesetFormula(context: InlineContext, latex: string, display: boolean): MathFormula | null {
+  const color = mathColor(context.color);
+  if (context.math === null || color === null) return null;
+  return context.math.formula(latex, display, context.size, color);
+}
+
+/**
+ * A formula inside a line of text: its baseline on the text's (React Native sets an inline view's
+ * bottom on the baseline), the part below it hanging into the line's descent as on the desktop.
+ */
+function InlineFormula({ formula, label }: { formula: MathFormula; label: string }) {
+  return (
+    <View
+      style={{ width: formula.width, height: formula.baseline ?? formula.height }}
+      accessible
+      accessibilityLabel={label}
+    >
+      <SvgXml xml={formula.svg} width={formula.width} height={formula.height} style={styles.inlineFormula} />
+    </View>
+  );
+}
+
+/** A `$$…$$` block: centred on its own line, scaled down to the transcript's width when it is wider. */
+function FormulaBlock({
+  block,
+  context,
+  blockKey,
+}: {
+  block: Extract<Block, { t: 'math' }>;
+  context: InlineContext;
+  blockKey: string;
+}) {
+  const [available, setAvailable] = useState<number | null>(null);
+  const formula = typesetFormula(context, block.latex, true);
+  if (formula === null) {
+    return (
+      <Text selectable={context.selectable} style={[styles.prose, { color: context.color }]}>
+        {highlightText(block.source, context.find, `${blockKey}.math`)}
+      </Text>
+    );
+  }
+  const fit = available !== null && formula.width > available ? available / formula.width : 1;
+  return (
+    <View
+      style={[styles.formulaBlock, { paddingVertical: context.size * 0.3 }]}
+      onLayout={(event) => setAvailable(event.nativeEvent.layout.width)}
+      accessible
+      accessibilityLabel={block.latex}
+    >
+      <SvgXml xml={formula.svg} width={formula.width * fit} height={formula.height * fit} />
+    </View>
+  );
 }
 
 /**
@@ -412,6 +479,8 @@ function Table({ block, context: rowContext }: { block: Extract<Block, { t: 'tab
   const [find, findDone] = useOwnFind(rowContext.find);
   const context = { ...rowContext, find };
   const measureContext = { ...rowContext, find: null };
+  const headColor = { color: theme.foreground };
+  const cellColor = { color: theme.prose };
   const { width } = useWindowDimensions();
   const [collapsed, setCollapsed] = useState(false);
   // The table fits the transcript's width (`fitTableColumns`). React Native has no table layout,
@@ -493,11 +562,11 @@ function Table({ block, context: rowContext }: { block: Extract<Block, { t: 'tab
               onLayout={(event) => report('max', column, event.nativeEvent.layout.width)}
             >
               <Text style={[styles.tableText, styles.strong]}>
-                {renderInlines(cell, measureContext, `mh${column}`)}
+                {renderInlines(cell, { ...measureContext, ...headColor }, `mh${column}`)}
               </Text>
               {block.rows.map((row, rowIndex) => (
                 <Text key={rowIndex} style={styles.tableText}>
-                  {renderInlines(row[column] ?? [], measureContext, `mr${rowIndex}.${column}`)}
+                  {renderInlines(row[column] ?? [], { ...measureContext, ...cellColor }, `mr${rowIndex}.${column}`)}
                 </Text>
               ))}
             </View>
@@ -525,7 +594,7 @@ function Table({ block, context: rowContext }: { block: Extract<Block, { t: 'tab
                   selectable={context.selectable}
                   style={[styles.tableText, styles.strong, { color: theme.foreground }]}
                 >
-                  {renderInlines(cell, context, `h${column}`)}
+                  {renderInlines(cell, { ...context, ...headColor }, `h${column}`)}
                 </Text>
               </View>
             ))}
@@ -545,7 +614,7 @@ function Table({ block, context: rowContext }: { block: Extract<Block, { t: 'tab
                     selectable={context.selectable}
                     style={[styles.tableText, { color: theme.prose }]}
                   >
-                    {renderInlines(cell, context, `r${rowIndex}.${column}`)}
+                    {renderInlines(cell, { ...context, ...cellColor }, `r${rowIndex}.${column}`)}
                   </Text>
                 </View>
               ))}
@@ -665,7 +734,8 @@ type BlockProps = {
   listDepth: { ordered: number; bullet: number };
 };
 
-function Blocks({ blocks, context, color, depth, listDepth }: BlockProps) {
+function Blocks({ blocks, context: outer, color, depth, listDepth }: BlockProps) {
+  const context = outer.color === color ? outer : { ...outer, color };
   const { theme } = context;
   const markedStyle = useMarkedStyle();
   const markedEmoji = useMarkedEmoji();
@@ -714,8 +784,22 @@ function Blocks({ blocks, context, color, depth, listDepth }: BlockProps) {
                   styles.headingBottom,
                 ]}
               >
-                {renderInlines(block.c, context, key)}
+                {renderInlines(
+                  block.c,
+                  {
+                    ...context,
+                    color: block.level === 6 ? theme.muted : context.heading,
+                    size: (context.size / PROSE_SIZE) * (HEADING_SIZES[block.level] ?? PROSE_SIZE),
+                  },
+                  key,
+                )}
               </Text>
+            );
+          case 'math':
+            return (
+              <View key={key} style={spacing}>
+                <FormulaBlock block={block} context={context} blockKey={key} />
+              </View>
             );
           case 'code':
             return (
@@ -892,6 +976,9 @@ export const Markdown = memo(function Markdown({
 }: MarkdownProps) {
   const { theme, dispatch } = useTranscriptEnv();
   const find = useRowFind();
+  const math = useMathLookup(useOptionalNativeChatUi()?.renderMath ?? null);
+  // Text follows the system's text size, so the formulas are typeset at the size it draws at.
+  const { fontScale } = useWindowDimensions();
   const blocks = useMemo(() => parseMarkdown(text, { breaks }), [breaks, text]);
   const referencesMap = useMemo(() => referenceMap(references), [references]);
   const openLink = useCallback(
@@ -908,8 +995,11 @@ export const Markdown = memo(function Markdown({
       find,
       strips,
       heading: headingColor ?? theme.primary,
+      math,
+      color: color ?? theme.prose,
+      size: PROSE_SIZE * fontScale,
     }),
-    [find, headingColor, openLink, referencesMap, selectable, strips, theme],
+    [color, find, fontScale, headingColor, math, openLink, referencesMap, selectable, strips, theme],
   );
   return (
     <View style={styles.root}>
@@ -932,6 +1022,8 @@ const styles = StyleSheet.create({
   del: { textDecorationLine: 'line-through' },
   inlineCode: { fontFamily: MONO_FONT, fontSize: CODE_SIZE },
   referenceIcon: { width: 13, height: 13, transform: [{ translateY: 2 }] },
+  inlineFormula: { position: 'absolute', left: 0, top: 0 },
+  formulaBlock: { alignItems: 'center' },
   questionTag: {
     flexDirection: 'row',
     alignItems: 'center',

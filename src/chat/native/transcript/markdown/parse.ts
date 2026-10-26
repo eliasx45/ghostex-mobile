@@ -1,7 +1,7 @@
 /**
  * A small GFM parser for the transcript: blocks (paragraphs, ATX and setext headings, fences, lists
- * with nesting and task boxes, quotes, tables, rules) and inlines (code, emphasis, strikethrough,
- * links, autolinks, hard breaks).
+ * with nesting and task boxes, quotes, tables, rules, display formulas) and inlines (code, emphasis,
+ * strikethrough, links, autolinks, hard breaks, formulas).
  *
  * The core ships each message's Markdown with its decisions already made and marked with the
  * private-use character U+E000 (`packages/gx-chat-core/src/transcript/native_markdown.rs`): a fence
@@ -49,6 +49,8 @@ export type Inline =
   | { t: 'link'; href: string; label: string; c: Inline[] }
   /** A marked picture: the projected image source (`images.rs`). */
   | { t: 'image'; image: JsonRecord }
+  /** A formula (`$…$`, `\(…\)`; `display` for `$$…$$` and `\[…\]`): its LaTeX and the text it was written as. */
+  | { t: 'math'; latex: string; display: boolean; source: string }
   | { t: 'br' };
 
 /** What a fence's header shows, when the core named a file for it (`code_block.rs`). */
@@ -78,6 +80,8 @@ export type Block =
    * for the thin rule with emojis off.
    */
   | { t: 'section'; meta: SectionMeta; all: Block[]; rest: Block[]; label: Inline[]; first: Block[] }
+  /** A `$$…$$` or `\[…\]` block on lines of its own (`MathLine::Display` in gx-chat-core `math_text.rs`). */
+  | { t: 'math'; latex: string; source: string }
   | { t: 'hr' };
 
 export type ParseOptions = {
@@ -215,6 +219,47 @@ function isTableStart(lines: readonly string[], index: number): boolean {
   return next !== undefined && line.includes('|') && TABLE_DELIMITER.test(next) && next.includes('-');
 }
 
+/**
+ * A display formula starting at `start`: a line opening with `$$` or `\[`, closed on it or on a
+ * later line (no blank line between, at most 40 lines), with nothing after the close. The rule of
+ * `math_lines` in gx-chat-core `math_text.rs`, which desktop draws with.
+ */
+function displayMath(lines: readonly string[], start: number): { latex: string; source: string; end: number } | null {
+  const trimmed = trimMarkdown(lines[start] ?? '');
+  const delimiters = trimmed.startsWith('$$') ? ['$$', '$$'] : trimmed.startsWith('\\[') ? ['\\[', '\\]'] : null;
+  if (delimiters === null) return null;
+  const [open, close] = delimiters as [string, string];
+  const afterOpen = trimmed.slice(open.length);
+  const sameLine = afterOpen.indexOf(close);
+  if (sameLine >= 0) {
+    const latex = afterOpen.slice(0, sameLine).trim();
+    if (afterOpen.slice(sameLine + close.length).trim().length > 0 || latex.length === 0) return null;
+    return { latex, source: trimmed, end: start + 1 };
+  }
+  const body = [afterOpen];
+  for (let index = start + 1; index < lines.length && index <= start + 40; index += 1) {
+    const next = trimMarkdown(lines[index]!);
+    const at = next.indexOf(close);
+    if (at >= 0) {
+      if (next.slice(at + close.length).trim().length > 0) return null;
+      body.push(next.slice(0, at));
+      const latex = body.join('\n').trim();
+      if (latex.length === 0) return null;
+      return {
+        latex,
+        source: lines
+          .slice(start, index + 1)
+          .map(trimMarkdown)
+          .join('\n'),
+        end: index + 1,
+      };
+    }
+    if (next.length === 0) return null;
+    body.push(next);
+  }
+  return null;
+}
+
 class BlockParser {
   constructor(private readonly options: ParseOptions) {}
 
@@ -323,6 +368,12 @@ class BlockParser {
         index = this.fence(lines, index, fence, out);
         continue;
       }
+      const display = displayMath(lines, index);
+      if (display !== null) {
+        out.push({ t: 'math', latex: display.latex, source: display.source });
+        index = display.end;
+        continue;
+      }
       const heading = ATX.exec(line);
       if (heading !== null) {
         out.push({ t: 'h', level: heading[1]!.length, c: this.inline((heading[2] ?? '').trim()) });
@@ -379,7 +430,7 @@ class BlockParser {
           index += 1;
           break;
         }
-        if (this.interrupts(current) || isTableStart(lines, index)) break;
+        if (this.interrupts(current) || isTableStart(lines, index) || displayMath(lines, index) !== null) break;
         paragraph.push(this.options.breaks === true ? current : trimMarkdown(current));
         index += 1;
       }
@@ -706,6 +757,50 @@ function closingDelimiter(text: string, start: number, run: string): number {
   return -1;
 }
 
+/**
+ * Where the `$…$` formula whose LaTeX starts at `open` closes, as Pandoc reads it (gx-chat-core
+ * `closing_dollar`): the opening `$` is not followed by a space, the closing one is not preceded
+ * by a space nor followed by a digit, so "costs $5 and $10" stays text. Never across a line, nor
+ * into a code span (a `$` in code stays code).
+ */
+function closingDollar(text: string, open: number): number {
+  const first = text[open];
+  if (first === undefined || /\s/.test(first) || first === '$') return -1;
+  let index = open;
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '\\') index += 2;
+    else if (character === '\n' || character === '`') return -1;
+    else if (character === '$') {
+      return !isSpace(text[index - 1]) && !/[0-9]/.test(text[index + 1] ?? '') ? index : -1;
+    } else index += 1;
+  }
+  return -1;
+}
+
+/**
+ * The formula written at `index` (`\(…\)`, `\[…\]`, `$$…$$`, `$…$`) and where it ends, as
+ * gx-chat-core `split_math` finds them; null when none starts there. A `\$` is an escape, not math.
+ */
+function mathAt(text: string, index: number): { inline: Inline; end: number } | null {
+  const rest = text.slice(index, index + 2);
+  const bracket = rest === '\\[' ? '\\]' : rest === '\\(' ? '\\)' : null;
+  if (bracket !== null || rest === '$$') {
+    const close = bracket ?? '$$';
+    const end = text.indexOf(close, index + 2);
+    if (end < 0) return null;
+    const latex = text.slice(index + 2, end).trim();
+    if (latex.length === 0) return null;
+    const source = text.slice(index, end + 2);
+    return { inline: { t: 'math', latex, display: rest !== '\\(', source }, end: end + 2 };
+  }
+  if (text[index] !== '$') return null;
+  const close = closingDollar(text, index + 1);
+  if (close < 0) return null;
+  const latex = text.slice(index + 1, close).trim();
+  return { inline: { t: 'math', latex, display: false, source: text.slice(index, close + 1) }, end: close + 1 };
+}
+
 export function parseInline(text: string, breaks: boolean): Inline[] {
   const out: Inline[] = [];
   let index = 0;
@@ -723,6 +818,21 @@ export function parseInline(text: string, breaks: boolean): Inline[] {
       continue;
     }
     const rest = text.slice(index);
+    if (character === '$' || (character === '\\' && (text[index + 1] === '(' || text[index + 1] === '['))) {
+      const math = mathAt(text, index);
+      if (math !== null) {
+        flush();
+        out.push(math.inline);
+        index = math.end;
+        continue;
+      }
+      // An unclosed `$$` stays text whole, so its second `$` does not open a formula.
+      if (rest.startsWith('$$')) {
+        plain += '$$';
+        index += 2;
+        continue;
+      }
+    }
     if (character === '\\' && index + 1 < text.length) {
       const next = text[index + 1]!;
       if (next === '\n') {
@@ -871,6 +981,8 @@ export function inlineText(inlines: readonly Inline[]): string {
         case 'text':
         case 'code':
           return inline.v;
+        case 'math':
+          return inline.source;
         case 'br':
           return '\n';
         case 'image':
