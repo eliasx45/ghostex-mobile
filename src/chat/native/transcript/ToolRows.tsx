@@ -111,7 +111,7 @@ export function ToolRows({ message }: { message: ProjectedMessage }) {
   );
   if (runOpen) {
     return (
-      <DisclosureBody onCollapse={toggleRun} label="Show fewer tool calls" gap={ROW_GAP}>
+      <DisclosureBody onCollapse={toggleRun} label={str(fold, 'expandedLabel') || 'Show fewer steps'} gap={ROW_GAP}>
         {rows(visible.filter((index) => index < before))}
         {toggle}
         {rows(visible.filter((index) => index >= before))}

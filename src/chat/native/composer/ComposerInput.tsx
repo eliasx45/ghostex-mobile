@@ -61,6 +61,8 @@ export const ComposerInput = forwardRef<
     /** Parses a draft's references now, for an edit that lands before `references` caught up. */
     parse: (text: string) => readonly ComposerReference[];
     placeholder: string;
+    /** The how-to the placeholder used to carry (CP5, 2026-10-28), read by screen readers. */
+    accessibilityHint?: string;
     collapsed: boolean;
     maxHeight: number;
     dispatch: (action: UserAction) => void;
@@ -77,6 +79,7 @@ export const ComposerInput = forwardRef<
     parsedFor,
     parse,
     placeholder,
+    accessibilityHint,
     collapsed,
     maxHeight,
     dispatch,
@@ -200,6 +203,7 @@ export const ComposerInput = forwardRef<
         onFocus={() => input.focused()}
         onBlur={() => input.blurred()}
         placeholder={collapsed ? '' : placeholder}
+        accessibilityHint={accessibilityHint}
         placeholderTextColor={P.placeholder}
         keyboardAppearance={P.light ? 'light' : 'dark'}
         autoCapitalize="sentences"

@@ -326,6 +326,16 @@ function ThinkingRow({ id, body, references }: { id: string; body: string; refer
  * thought below it; open while it is being written, it keeps the newest lines in view until the
  * reader scrolls up.
  */
+/** The live label for a thought started at `startedAt` (epoch ms), from the core's ladder. */
+function liveThinkingLabel(ladder: [number, string][] | undefined, startedAt: number | null | undefined): string {
+  const elapsed = typeof startedAt === 'number' ? Date.now() - startedAt : 0;
+  let label = 'Thinking\u2026';
+  for (const [at, text] of ladder ?? []) {
+    if (elapsed >= at) label = text;
+  }
+  return label;
+}
+
 function ThinkingLine({ id, body, message }: { id: string; body: string; message: ProjectedMessage }) {
   const { theme, mutedThinking } = useTranscriptEnv();
   const { disclosures } = useNativeChatUi();
@@ -338,7 +348,11 @@ function ThinkingLine({ id, body, message }: { id: string; body: string; message
   const preview = (card?.preview ?? '') || (message.thinkingRow?.preview ?? '');
   // A Codex reasoning summary is often its headline alone: there is nothing to open.
   const expandable = card !== undefined || message.thinkingRow?.expandable !== false;
-  const title = live ? 'Thinking\u2026' : 'Thought';
+  // Claude Code's words from the core (TH1/TH2, 2026-10-28, "Phone too"): "Thought for 12s" once
+  // done; a live thought climbs the core's ladder from its start ("Still thinking…" at 15 s, …).
+  const title = live
+    ? liveThinkingLabel(message.thinkingRow?.liveLabels, message.thinkingRow?.startedAt)
+    : message.thinkingRow?.label || 'Thought';
   return (
     <View style={styles.thinkingLine}>
       <Pressable

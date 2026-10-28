@@ -309,7 +309,15 @@ export type ProjectedMessage = {
    * `live` while it is the row being written, `preview` its newest finished line. */
   thinkingCard?: { live: boolean; preview: string };
   /** A thought's one line and whether opening it shows more (gx-chat-core `thinking_row`). */
-  thinkingRow?: { preview: string; expandable: boolean };
+  thinkingRow?: {
+    preview: string;
+    expandable: boolean;
+    /** "Thought for 12s" (gx-chat-core thinking_card.rs, 2026-10-28). */
+    label?: string;
+    startedAt?: number | null;
+    /** Claude Code's live ladder: `[fromMs, label]`. */
+    liveLabels?: [number, string][];
+  };
   /** The live terminal tool row synthesized from the agent's screen. Desktop: `terminal_tool_row.rs`. */
   terminalTool?: Json;
   /** A `!` command the user ran, drawn as its tool card in the user's place. Desktop: `shell_command_card` in `tool_run.rs`. */
@@ -422,6 +430,8 @@ export type ChatDocument = {
   draft: DraftState;
   /** Placeholder text for the composer field. Desktop: `state.rs` (`ensure_input`). */
   composerPlaceholder: string;
+  /** The composer's how-to, the field's hint since the placeholder became one line (CP5). */
+  composerHint?: string;
   /** Why sending is blocked, or null. Send shows the `sendBlockedToast` query's text instead.
    * Desktop: `composer.rs`, `send_control.rs`. */
   sendBlockedReason: string | null;

@@ -569,6 +569,8 @@ export function NativeComposer({
                 parsedFor={text}
                 parse={parseDraftReferences}
                 placeholder={placeholder}
+                // CP5 (2026-10-28): the placeholder is one line ("Ask Claude…" / "Reply…"); the how-to it carried is the hint.
+                accessibilityHint={document?.composerHint || undefined}
                 collapsed={collapsed}
                 maxHeight={INPUT_MAX_HEIGHT}
                 dispatch={dispatch}
