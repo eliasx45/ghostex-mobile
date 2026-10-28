@@ -23,6 +23,7 @@ import {
   singleLineShell,
 } from '../transcript/singleLineCard';
 import { MONO_FONT, themedStyles, useTranscriptTheme } from '../transcript/theme';
+import { ClaudeButton, ClaudeOptionRow, useClaudeLook } from './claudeAsk';
 
 /** Whether an answered exchange got an answer. */
 export type AskTone = 'answered' | 'quiet';
@@ -70,16 +71,20 @@ export function AskCard({
 }) {
   const styles = useStyles();
   const P = useTranscriptTheme();
+  // The Claude look's open card: radius 12, a footer over a 0.5pt rule with no fill (claudeAsk.tsx).
+  const claude = useClaudeLook() && singleLine !== true && lined !== true;
   const hasBody = children !== undefined && children !== null && children !== false;
   return (
-    <View style={[styles.card, singleLine === true && singleLineShell(P), style]}>
+    <View style={[styles.card, claude && styles.claudeCard, singleLine === true && singleLineShell(P), style]}>
       {head}
       {hasBody ? (
         <View style={[styles.body, (singleLine === true || lined === true) && styles.singleLineBody, bodyStyle]}>
           {children}
         </View>
       ) : null}
-      {footer !== undefined && footer !== null ? <View style={styles.footer}>{footer}</View> : null}
+      {footer !== undefined && footer !== null ? (
+        <View style={[styles.footer, claude && styles.claudeFooter]}>{footer}</View>
+      ) : null}
     </View>
   );
 }
@@ -213,12 +218,28 @@ export function AskOption({
 }) {
   const styles = useStyles();
   const P = useTranscriptTheme();
+  const claude = useClaudeLook();
   // A pick waiting to be sent is a light amber tint; once sent it reads green at full strength (desktop ask_card.rs).
   const sent = answered === true;
   const hue = sent ? answeredColor(P.light) : askColor(P.light);
   const [edge, wash] = sent ? [0.55, 0.08] : [0.32, 0.04];
   const markHue = sent ? hue : tint(hue, 0.85);
   const showDetail = detail !== undefined && detail.length > 0 && detail !== label;
+  if (claude) {
+    return (
+      <ClaudeOptionRow
+        label={label}
+        detail={detail}
+        picked={picked}
+        multiple={multiple}
+        keyLabel={keyLabel}
+        recommended={recommended}
+        other={other}
+        enabled={enabled}
+        onPress={onPress}
+      />
+    );
+  }
   return (
     <Pressable
       accessibilityRole={multiple ? 'checkbox' : 'radio'}
@@ -273,6 +294,7 @@ export function PrimaryButton({
   disabled?: boolean;
 }) {
   const styles = useStyles();
+  if (useClaudeLook()) return <ClaudeButton label={label} onPress={onPress} disabled={disabled} primary />;
   return (
     <Pressable
       accessibilityRole="button"
@@ -297,6 +319,7 @@ export function PrimaryButton({
 export function SoftButton({ label, onPress }: { label: string; onPress: () => void }) {
   const styles = useStyles();
   const P = useTranscriptTheme();
+  if (useClaudeLook()) return <ClaudeButton label={label} onPress={onPress} />;
   return (
     <Pressable
       accessibilityRole="button"
@@ -371,6 +394,17 @@ const useStyles = themedStyles((P) => ({
     borderColor: P.inputBorder,
     backgroundColor: P.cardPanel,
     overflow: 'hidden',
+  },
+  claudeCard: {
+    borderRadius: 12,
+  },
+  claudeFooter: {
+    minHeight: 48,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderTopWidth: 0.5,
+    borderTopColor: P.ink(0.1),
+    backgroundColor: 'transparent',
   },
   head: {
     flexDirection: 'row',

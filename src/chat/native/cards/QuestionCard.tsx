@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import { ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 
 import type { ChatDocument } from '../../rust/document';
 import type { RustChat } from '../../rust/useRustChat';
@@ -20,6 +20,7 @@ import { SingleLineTile } from '../transcript/singleLineCard';
 import { CardButton, CardHeader, StatusCard, useCardText } from './primitives';
 import { ApprovalCard, RECONNECTING_NOTE } from './ApprovalCard';
 import { useEchoedText } from './useEchoedText';
+import { ClaudeButton, ClaudeHairline, ClaudeOptionRow, NeedsInputPill, claudeAskColors, useClaudeLook } from './claudeAsk';
 
 /** The share of the window the cards band above the composer may take (`NativeChatCards`). */
 export const CARD_BAND_SHARE = 0.6;
@@ -58,7 +59,190 @@ export function QuestionCard({ chat, document }: { chat: RustChat; document: Cha
   return <QuestionPromptCard chat={chat} document={document} />;
 }
 
-function QuestionPromptCard({ chat, document }: { chat: RustChat; document: ChatDocument }) {
+function QuestionPromptCard(props: { chat: RustChat; document: ChatDocument }) {
+  return useClaudeLook() ? <ClaudeQuestionPromptCard {...props} /> : <GhostexQuestionPromptCard {...props} />;
+}
+
+/**
+ * The question card in the Claude look (claudeAsk.tsx): the question on a darker header strip with
+ * a "‹ 1 of 2 ›" pager and the fold chevron, hairline-separated option rows, a last "Other" row
+ * that opens into a text field, Cancel / Skip / Submit, and the "Needs your input" pill under it.
+ * Same actions and payloads as Ghostex's look below (desktop claude_question_card.rs).
+ */
+function ClaudeQuestionPromptCard({ chat, document }: { chat: RustChat; document: ChatDocument }) {
+  const styles = useStyles();
+  const P = useTranscriptTheme();
+  const colors = claudeAskColors(P);
+  const { dispatch } = chat;
+  const maxHeight = questionCardMaxHeight(useWindowDimensions().height);
+  const card = document.questionCard;
+  const prompt = document.prompt;
+  const questions = arr(obj(prompt)?.questions);
+  const count = questions.length;
+  const index = card.questionIndex ?? 0;
+  const last = index + 1 >= count;
+  const question = questions[index];
+  const draft = card.drafts[index] ?? { indices: [], other: '' };
+  const busy = card.busy;
+  const multi = isTrue(question, 'multiSelect');
+  const promptKey = useMemo(() => JSON.stringify(prompt), [prompt]);
+  const [collapsedKey, setCollapsedKey] = useState<string | null>(null);
+  const collapsed = collapsedKey === promptKey;
+  const [otherKey, setOtherKey] = useState<string | null>(null);
+
+  const reportText = useCallback((text: string) => dispatch({ type: 'questionText', text }), [dispatch]);
+  const [other, setOther] = useEchoedText(`${promptKey}:${index}`, draft.other ?? '', reportText);
+  const allowCustom = obj(question)?.allowCustom !== false;
+  const otherOpen = allowCustom && (otherKey === `${promptKey}:${index}` || other.length > 0);
+  const answered = draft.indices.length > 0 || other.trim().length > 0;
+  const options = arr(obj(question)?.options);
+  const previews = !multi && options.some((option) => str(option, 'preview').length > 0);
+  const focused = draft.indices[0] ?? 0;
+  const preview = previews ? str(options[focused], 'preview') : '';
+  const sending = card.controls.label === 'Sending…';
+  const submitLabel = sending ? 'Sending…' : last ? 'Submit' : 'Next';
+
+  return (
+    <View style={styles.claudeWrap}>
+      <View style={[styles.claudeCard, { maxHeight }]}>
+        <View style={[styles.claudeHead, { backgroundColor: colors.head }, collapsed && styles.claudeHeadFolded]}>
+          <ScrollView style={styles.questionScroll} nestedScrollEnabled>
+            <Text style={styles.claudeQuestion} numberOfLines={collapsed ? 1 : undefined}>
+              {str(question, 'question')}
+            </Text>
+          </ScrollView>
+          <View style={styles.claudeHeadTools}>
+            {count > 1 ? (
+              <View style={styles.pager}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Previous question"
+                  disabled={busy || index === 0}
+                  hitSlop={8}
+                  onPress={() => dispatch({ type: 'questionBack' })}
+                  style={[styles.pagerButton, (busy || index === 0) && styles.pagerDisabled]}
+                >
+                  <Glyph name="chevron-left" size={14} color={P.muted} />
+                </Pressable>
+                <Text style={styles.pagerLabel}>{`${index + 1} of ${count}`}</Text>
+                {/* Forward without an answer is the core's Next short of the last question, which never sends. */}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Next question"
+                  disabled={busy || last}
+                  hitSlop={8}
+                  onPress={() => dispatch({ type: 'questionNext' })}
+                  style={[styles.pagerButton, (busy || last) && styles.pagerDisabled]}
+                >
+                  <Glyph name="chevron-right" size={14} color={P.muted} />
+                </Pressable>
+              </View>
+            ) : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={collapsed ? 'Show the question and its options' : 'Hide the question and its options'}
+              hitSlop={8}
+              onPress={() => setCollapsedKey(collapsed ? null : promptKey)}
+              style={styles.pagerButton}
+            >
+              <Glyph name={collapsed ? 'chevron-up' : 'chevron-down'} size={14} color={P.muted} />
+            </Pressable>
+          </View>
+        </View>
+        {collapsed ? null : (
+          <View style={[styles.claudeBody, styles.shrinks]}>
+            <ScrollView style={{ maxHeight: maxHeight * 0.45 }} nestedScrollEnabled>
+              {options.map((option, optionIndex) => {
+                // A one-of-N note replaces the pick, so the pick stays lit only while there is none.
+                const selected = (multi || other.trim().length === 0) && draft.indices.includes(optionIndex);
+                return (
+                  <View key={optionIndex}>
+                    <ClaudeOptionRow
+                      label={str(option, 'label')}
+                      detail={str(option, 'description')}
+                      picked={selected}
+                      multiple={multi}
+                      enabled={!busy}
+                      onPress={() => {
+                        setOtherKey(null);
+                        dispatch({ type: 'questionOption', index: optionIndex });
+                      }}
+                    />
+                    {optionIndex + 1 < options.length || allowCustom ? <ClaudeHairline /> : null}
+                  </View>
+                );
+              })}
+              {allowCustom ? (
+                <ClaudeOptionRow
+                  label="Other"
+                  picked={otherOpen}
+                  multiple={multi}
+                  other
+                  enabled={!busy}
+                  onPress={() => setOtherKey(`${promptKey}:${index}`)}
+                >
+                  {otherOpen ? (
+                    <TextInput
+                      accessibilityLabel="Other"
+                      style={styles.otherInput}
+                      value={other}
+                      onChangeText={setOther}
+                      editable={!busy}
+                      autoFocus={other.length === 0}
+                      multiline
+                      submitBehavior="submit"
+                      returnKeyType="send"
+                      onSubmitEditing={() => dispatch({ type: 'questionNext' })}
+                      placeholder="Other"
+                      placeholderTextColor={P.placeholder}
+                    />
+                  ) : undefined}
+                </ClaudeOptionRow>
+              ) : null}
+            </ScrollView>
+            {/* The picked option's preview (the first one's before a pick), under the list on a phone. */}
+            {preview.length > 0 ? (
+              <ScrollView style={styles.claudePreview} nestedScrollEnabled>
+                <Text style={styles.commandText} selectable>
+                  {preview}
+                </Text>
+              </ScrollView>
+            ) : null}
+          </View>
+        )}
+        <View style={[styles.claudeRule, { backgroundColor: colors.hairline }]} />
+        <View style={styles.claudeFooter}>
+          <View style={styles.claudeFooterStart}>
+            <ClaudeButton label="Cancel" disabled={busy} onPress={() => dispatch({ type: 'questionCancel' })} />
+            {card.reconnecting === true ? (
+              <Text style={styles.claudeStatus} numberOfLines={2}>
+                {RECONNECTING_NOTE}
+              </Text>
+            ) : multi && draft.indices.length > 0 ? (
+              <Text style={styles.claudeStatus}>{`${draft.indices.length} selected`}</Text>
+            ) : null}
+          </View>
+          {!answered ? (
+            <ClaudeButton
+              label="Skip"
+              disabled={busy || (last && card.controls.hasAnswer !== true)}
+              onPress={() => dispatch({ type: 'questionNext' })}
+            />
+          ) : null}
+          <ClaudeButton
+            label={submitLabel}
+            primary
+            disabled={busy || card.controls.disabled || !answered}
+            onPress={() => dispatch({ type: 'questionNext' })}
+          />
+        </View>
+      </View>
+      <NeedsInputPill />
+    </View>
+  );
+}
+
+function GhostexQuestionPromptCard({ chat, document }: { chat: RustChat; document: ChatDocument }) {
   const cardText = useCardText();
   const styles = useStyles();
   const P = useTranscriptTheme();
@@ -239,6 +423,108 @@ const useStyles = themedStyles((P) => ({
     paddingVertical: 8,
     borderRadius: 8,
     backgroundColor: P.wellFill,
+  },
+  claudeWrap: {
+    gap: 8,
+  },
+  claudeCard: {
+    width: '100%',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: P.inputBorder,
+    backgroundColor: P.cardPanel,
+    overflow: 'hidden',
+  },
+  claudeHead: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingLeft: 16,
+    paddingRight: 12,
+    paddingTop: 12,
+    paddingBottom: 8,
+    flexShrink: 1,
+  },
+  claudeHeadFolded: {
+    paddingBottom: 12,
+  },
+  claudeQuestion: {
+    color: P.foreground,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '500',
+  },
+  claudeHeadTools: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    height: 22,
+  },
+  pager: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  pagerButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pagerDisabled: {
+    opacity: 0.4,
+  },
+  pagerLabel: {
+    color: P.muted,
+    fontSize: 14,
+    lineHeight: 20,
+    fontVariant: ['tabular-nums'],
+  },
+  claudeBody: {
+    padding: 6,
+    gap: 6,
+  },
+  otherInput: {
+    flex: 1,
+    minWidth: 0,
+    maxHeight: 96,
+    color: P.foreground,
+    fontSize: 14,
+    lineHeight: 20,
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+  },
+  claudePreview: {
+    maxHeight: 256,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: P.ink(0.05),
+  },
+  claudeRule: {
+    height: 0.5,
+  },
+  claudeFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+  },
+  claudeFooterStart: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  claudeStatus: {
+    flexShrink: 1,
+    color: P.muted,
+    fontSize: 11,
+    lineHeight: 17,
   },
   commandText: {
     color: P.cardMuted,

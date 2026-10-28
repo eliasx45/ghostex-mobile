@@ -75,6 +75,11 @@ export type GhostexSettings = {
    * expandable counts. Same key and default as the desktop's `sessionChatSimpleMode`.
    */
   sessionChatSimpleMode: boolean;
+  /**
+   * Draw the chat's question cards in Claude Code's look (desktop `sessionChatClaudeLook`, on by
+   * default). The phone has no owner pack, so its Claude look uses its own theme's colours.
+   */
+  sessionChatClaudeLook: boolean;
   /** Reveal thinking-owned tool calls by default. */
   sessionChatVerboseMode: boolean;
   /**
@@ -180,6 +185,7 @@ export function defaultSettings(): GhostexSettings {
     sessionChatCustomTranscriptWidthEnabled: false,
     sessionChatTranscriptWidthPercent: DEFAULT_SESSION_CHAT_TRANSCRIPT_WIDTH_PERCENT,
     sessionChatSimpleMode: true,
+    sessionChatClaudeLook: true,
     sessionChatVerboseMode: false,
     sessionLinksFoldedGroups: ['finished', 'removed'],
     sessionChatFileEditPreviews: false,
@@ -290,6 +296,7 @@ function sanitizeSettings(value: unknown): GhostexSettings {
     sessionChatFileEditPreviews: bool('sessionChatFileEditPreviews', defaults.sessionChatFileEditPreviews),
     sessionChatMutedThinking: bool('sessionChatMutedThinking', defaults.sessionChatMutedThinking),
     sessionChatSimpleMode: bool('sessionChatSimpleMode', defaults.sessionChatSimpleMode),
+    sessionChatClaudeLook: bool('sessionChatClaudeLook', defaults.sessionChatClaudeLook),
     sessionChatVerboseMode: bool('sessionChatVerboseMode', defaults.sessionChatVerboseMode),
     sessionLinksFoldedGroups: Array.isArray(record.sessionLinksFoldedGroups)
       ? record.sessionLinksFoldedGroups.filter((group): group is string => typeof group === 'string')

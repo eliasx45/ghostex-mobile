@@ -22,6 +22,7 @@ import { Glyph } from './icons';
 import { SingleLinePill, SingleLineTile } from './singleLineCard';
 import { MONO_FONT } from './theme';
 import { QuestionFlashFrame, useQuestionAnchor } from './OpenQuestions';
+import { useClaudeLook } from '../cards/claudeAsk';
 
 /** The document's `questionForms`, by form id. */
 const FormsContext = createContext<{ [id: string]: Json }>({});
@@ -313,8 +314,10 @@ function FormQuestion({
   const reveal = useRevealFocusedField();
   const skipped = draft?.skipped === true;
   const anchor = useQuestionAnchor(formId, tag);
+  // Claude's rows carry their own height and pressed fill, so they sit closer together.
+  const claude = useClaudeLook();
   return (
-    <View ref={anchor} collapsable={false} style={styles.question}>
+    <View ref={anchor} collapsable={false} style={[styles.question, claude && styles.claudeQuestion]}>
       <View style={styles.questionHead}>
         <Text style={[styles.questionTitle, { color: theme.foreground }]}>{str(question, 'title')}</Text>
         {tag.length > 0 ? (
@@ -387,6 +390,7 @@ const styles = StyleSheet.create({
   later: { marginTop: 16, paddingTop: 16, borderTopWidth: 1 },
   errorBody: { gap: 8 },
   question: { gap: 8 },
+  claudeQuestion: { gap: 2 },
   // The user's pick (desktop question_form.rs): the tag is a filled chip at the right end of the title's first line, the title wrapping beside it.
   questionHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   tag: {
