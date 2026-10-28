@@ -20,7 +20,14 @@ import { SingleLineTile } from '../transcript/singleLineCard';
 import { CardButton, CardHeader, StatusCard, useCardText } from './primitives';
 import { ApprovalCard, RECONNECTING_NOTE } from './ApprovalCard';
 import { useEchoedText } from './useEchoedText';
-import { ClaudeButton, ClaudeHairline, ClaudeOptionRow, NeedsInputPill, claudeAskColors, useClaudeLook } from './claudeAsk';
+import {
+  ClaudeButton,
+  ClaudeHairline,
+  ClaudeOptionRow,
+  NeedsInputPill,
+  claudeAskColors,
+  useClaudeLook,
+} from './claudeAsk';
 
 /** The share of the window the cards band above the composer may take (`NativeChatCards`). */
 export const CARD_BAND_SHARE = 0.6;
@@ -65,8 +72,9 @@ function QuestionPromptCard(props: { chat: RustChat; document: ChatDocument }) {
 
 /**
  * The question card in the Claude look (claudeAsk.tsx): the question on a darker header strip with
- * a "‹ 1 of 2 ›" pager and the fold chevron, hairline-separated option rows, a last "Other" row
- * that opens into a text field, Cancel / Skip / Submit, and the "Needs your input" pill under it.
+ * a "‹ 1 of 2 ›" pager and the × (the interrupt), hairline-separated option rows, a last "Other"
+ * row that opens into a text field, Skip / Submit, and the "Needs your input" pill under it. It
+ * never folds (CDXC:SessionChat 2026-10-28, "fix to match claude").
  * Same actions and payloads as Ghostex's look below (desktop claude_question_card.rs).
  */
 function ClaudeQuestionPromptCard({ chat, document }: { chat: RustChat; document: ChatDocument }) {
@@ -86,8 +94,6 @@ function ClaudeQuestionPromptCard({ chat, document }: { chat: RustChat; document
   const busy = card.busy;
   const multi = isTrue(question, 'multiSelect');
   const promptKey = useMemo(() => JSON.stringify(prompt), [prompt]);
-  const [collapsedKey, setCollapsedKey] = useState<string | null>(null);
-  const collapsed = collapsedKey === promptKey;
   const [otherKey, setOtherKey] = useState<string | null>(null);
 
   const reportText = useCallback((text: string) => dispatch({ type: 'questionText', text }), [dispatch]);
@@ -105,11 +111,9 @@ function ClaudeQuestionPromptCard({ chat, document }: { chat: RustChat; document
   return (
     <View style={styles.claudeWrap}>
       <View style={[styles.claudeCard, { maxHeight }]}>
-        <View style={[styles.claudeHead, { backgroundColor: colors.head }, collapsed && styles.claudeHeadFolded]}>
+        <View style={[styles.claudeHead, { backgroundColor: colors.head }]}>
           <ScrollView style={styles.questionScroll} nestedScrollEnabled>
-            <Text style={styles.claudeQuestion} numberOfLines={collapsed ? 1 : undefined}>
-              {str(question, 'question')}
-            </Text>
+            <Text style={styles.claudeQuestion}>{str(question, 'question')}</Text>
           </ScrollView>
           <View style={styles.claudeHeadTools}>
             {count > 1 ? (
@@ -138,82 +142,81 @@ function ClaudeQuestionPromptCard({ chat, document }: { chat: RustChat; document
                 </Pressable>
               </View>
             ) : null}
+            {/* Claude's × in the corner: the interrupt Ghostex's look puts on its Cancel (CDXC:SessionChat 2026-10-28 in desktop claude_question_card.rs). */}
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={collapsed ? 'Show the question and its options' : 'Hide the question and its options'}
+              accessibilityLabel="Dismiss"
+              disabled={busy}
               hitSlop={8}
-              onPress={() => setCollapsedKey(collapsed ? null : promptKey)}
-              style={styles.pagerButton}
+              onPress={() => dispatch({ type: 'questionCancel' })}
+              style={[styles.pagerButton, busy && styles.pagerDisabled]}
             >
-              <Glyph name={collapsed ? 'chevron-up' : 'chevron-down'} size={14} color={P.muted} />
+              <Glyph name="x" size={14} color={P.muted} />
             </Pressable>
           </View>
         </View>
-        {collapsed ? null : (
-          <View style={[styles.claudeBody, styles.shrinks]}>
-            <ScrollView style={{ maxHeight: maxHeight * 0.45 }} nestedScrollEnabled>
-              {options.map((option, optionIndex) => {
-                // A one-of-N note replaces the pick, so the pick stays lit only while there is none.
-                const selected = (multi || other.trim().length === 0) && draft.indices.includes(optionIndex);
-                return (
-                  <View key={optionIndex}>
-                    <ClaudeOptionRow
-                      label={str(option, 'label')}
-                      detail={str(option, 'description')}
-                      picked={selected}
-                      multiple={multi}
-                      enabled={!busy}
-                      onPress={() => {
-                        setOtherKey(null);
-                        dispatch({ type: 'questionOption', index: optionIndex });
-                      }}
-                    />
-                    {optionIndex + 1 < options.length || allowCustom ? <ClaudeHairline /> : null}
-                  </View>
-                );
-              })}
-              {allowCustom ? (
-                <ClaudeOptionRow
-                  label="Other"
-                  picked={otherOpen}
-                  multiple={multi}
-                  other
-                  enabled={!busy}
-                  onPress={() => setOtherKey(`${promptKey}:${index}`)}
-                >
-                  {otherOpen ? (
-                    <TextInput
-                      accessibilityLabel="Other"
-                      style={styles.otherInput}
-                      value={other}
-                      onChangeText={setOther}
-                      editable={!busy}
-                      autoFocus={other.length === 0}
-                      multiline
-                      submitBehavior="submit"
-                      returnKeyType="send"
-                      onSubmitEditing={() => dispatch({ type: 'questionNext' })}
-                      placeholder="Other"
-                      placeholderTextColor={P.placeholder}
-                    />
-                  ) : undefined}
-                </ClaudeOptionRow>
-              ) : null}
-            </ScrollView>
-            {/* The picked option's preview (the first one's before a pick), under the list on a phone. */}
-            {preview.length > 0 ? (
-              <ScrollView style={styles.claudePreview} nestedScrollEnabled>
-                <Text style={styles.commandText} selectable>
-                  {preview}
-                </Text>
-              </ScrollView>
+        <View style={[styles.claudeBody, styles.shrinks]}>
+          <ScrollView style={{ maxHeight: maxHeight * 0.45 }} nestedScrollEnabled>
+            {options.map((option, optionIndex) => {
+              // A one-of-N note replaces the pick, so the pick stays lit only while there is none.
+              const selected = (multi || other.trim().length === 0) && draft.indices.includes(optionIndex);
+              return (
+                <View key={optionIndex}>
+                  <ClaudeOptionRow
+                    label={str(option, 'label')}
+                    detail={str(option, 'description')}
+                    picked={selected}
+                    multiple={multi}
+                    enabled={!busy}
+                    onPress={() => {
+                      setOtherKey(null);
+                      dispatch({ type: 'questionOption', index: optionIndex });
+                    }}
+                  />
+                  {optionIndex + 1 < options.length || allowCustom ? <ClaudeHairline /> : null}
+                </View>
+              );
+            })}
+            {allowCustom ? (
+              <ClaudeOptionRow
+                label="Other"
+                picked={otherOpen}
+                multiple={multi}
+                other
+                enabled={!busy}
+                onPress={() => setOtherKey(`${promptKey}:${index}`)}
+              >
+                {otherOpen ? (
+                  <TextInput
+                    accessibilityLabel="Other"
+                    style={styles.otherInput}
+                    value={other}
+                    onChangeText={setOther}
+                    editable={!busy}
+                    autoFocus={other.length === 0}
+                    multiline
+                    submitBehavior="submit"
+                    returnKeyType="send"
+                    onSubmitEditing={() => dispatch({ type: 'questionNext' })}
+                    placeholder="Other"
+                    placeholderTextColor={P.placeholder}
+                  />
+                ) : undefined}
+              </ClaudeOptionRow>
             ) : null}
-          </View>
-        )}
+          </ScrollView>
+          {/* The picked option's preview (the first one's before a pick), under the list on a phone. */}
+          {preview.length > 0 ? (
+            <ScrollView style={styles.claudePreview} nestedScrollEnabled>
+              <Text style={styles.commandText} selectable>
+                {preview}
+              </Text>
+            </ScrollView>
+          ) : null}
+        </View>
         <View style={[styles.claudeRule, { backgroundColor: colors.hairline }]} />
         <View style={styles.claudeFooter}>
           <View style={styles.claudeFooterStart}>
-            <ClaudeButton label="Cancel" disabled={busy} onPress={() => dispatch({ type: 'questionCancel' })} />
             {card.reconnecting === true ? (
               <Text style={styles.claudeStatus} numberOfLines={2}>
                 {RECONNECTING_NOTE}
@@ -444,9 +447,6 @@ const useStyles = themedStyles((P) => ({
     paddingTop: 12,
     paddingBottom: 8,
     flexShrink: 1,
-  },
-  claudeHeadFolded: {
-    paddingBottom: 12,
   },
   claudeQuestion: {
     color: P.foreground,
