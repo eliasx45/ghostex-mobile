@@ -43,13 +43,43 @@ function androidSelfUpdateEnabled() {
   throw new Error(`GHOSTEX_ANDROID_SELF_UPDATE must be 0 or 1, got ${raw}`);
 }
 
+// Elias's fork build (scripts/fork/phone-testflight.sh in the Ghostex fork sets GHOSTEX_FORK_BUILD=1):
+// its own bundle id, team, name ("Ghostex Fork") and badged icon, so his TestFlight build installs
+// next to the official app instead of replacing it. Over-the-air updates are always off for it:
+// ota.ghostex.dev serves upstream-signed JavaScript that would overwrite the fork's. The ghostex.dev
+// universal link is dropped too (its apple-app-site-association names only the official app); the
+// pairing QR still scans in the app. Without the variable nothing here changes.
+const FORK_BUILD = process.env.GHOSTEX_FORK_BUILD === '1';
+const FORK_BUNDLE_ID = process.env.GHOSTEX_FORK_BUNDLE_ID || 'com.eliasx45.ghostex.fork';
+const FORK_TEAM_ID = process.env.GHOSTEX_FORK_TEAM_ID || 'GQQBT37P3D';
+const FORK_DISPLAY_NAME = 'Ghostex Fork';
+
+function forkIos(ios) {
+  // eslint-disable-next-line no-unused-vars
+  const { associatedDomains, ...rest } = ios;
+  return {
+    ...rest,
+    bundleIdentifier: FORK_BUNDLE_ID,
+    appleTeamId: FORK_TEAM_ID,
+    icon: './assets/icon-fork.png',
+    entitlements: {
+      ...ios.entitlements,
+      'application-identifier': `$(AppIdentifierPrefix)${FORK_BUNDLE_ID}`,
+      'keychain-access-groups': [`$(AppIdentifierPrefix)${FORK_BUNDLE_ID}`],
+    },
+    // Set here, Expo's withDisplayName leaves CFBundleDisplayName alone, so `name` (and with it the
+    // Xcode project, scheme and Ghostex.app) stays Ghostex.
+    infoPlist: { ...ios.infoPlist, CFBundleDisplayName: FORK_DISPLAY_NAME },
+  };
+}
+
 module.exports = () => {
   const version = process.env.GHOSTEX_RELEASE_VERSION || app.expo.version;
   const buildNumber = process.env.GHOSTEX_RELEASE_BUILD_NUMBER || String(releaseBuildNumber(version));
   const androidSelfUpdate = androidSelfUpdateEnabled();
   const basePermissions = app.expo.android.permissions ?? [];
   const baseBlockedPermissions = app.expo.android.blockedPermissions ?? [];
-  const overTheAir = Boolean(process.env.GHOSTEX_RELEASE_VERSION);
+  const overTheAir = !FORK_BUILD && Boolean(process.env.GHOSTEX_RELEASE_VERSION);
 
   return {
     ...app.expo,
@@ -73,7 +103,7 @@ module.exports = () => {
         }
       : { enabled: false },
     ios: {
-      ...app.expo.ios,
+      ...(FORK_BUILD ? forkIos(app.expo.ios) : app.expo.ios),
       buildNumber,
       runtimeVersion: overTheAir ? otaRuntimeVersion('ios', { androidSelfUpdate }) : 'dev',
     },
