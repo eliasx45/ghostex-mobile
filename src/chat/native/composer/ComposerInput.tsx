@@ -24,6 +24,7 @@ import type { UserAction } from '../../rust/actions';
 import type { ComposerModelState } from '../../rust/composer';
 import type { RustChat } from '../../rust/useRustChat';
 import { themedStyles, useTranscriptTheme } from '../transcript/theme';
+import { joinImages, splitImages } from './imageTiles';
 import { diffEdit, guardEdit, snapCaret, type ComposerReference } from './references';
 
 export type ComposerInputHandle = { focus(): void; blur(): void };
@@ -118,14 +119,24 @@ export const ComposerInput = forwardRef<
     if (model.caret !== null) setForced({ start: model.caret, end: model.caret });
   }, [model.replaceSequence, model.text, model.caret, onTextChange]);
 
-  const live = parsedFor === text ? references : [];
+  // CDXC:SessionChat 2026-10-28 DECISION: Elias: "No need to have the sort of image text here. We already have the image. No need to have the image as well in the text. Fix it." ("Yes, phone too"). `text` is the whole draft; the field shows `shown`, the draft without its `[Image #N](path)` references, which the model keeps after the typed text (`imageTiles.ts`), so the field's offsets are still draft offsets. The pictures are the tiles above the field, never a pill in it.
+  const shown = useMemo(() => splitImages(text, 0).visible, [text]);
+  const inField = (list: readonly ComposerReference[], visible: string): ComposerReference[] =>
+    list.filter((reference) => reference.kind !== 'image' && reference.end <= visible.length);
+  const live = parsedFor === text ? inField(references, shown) : [];
 
   const onChangeText = (next: string): void => {
     const before = textRef.current;
+    const split = splitImages(before, 0);
+    const beforeShown = split.visible;
     // Guard against the pills of the text being edited. Key repeats (a held Backspace) arrive
     // before the parent re-parses the previous edit, and an empty list let them eat a pill's
     // markdown one character at a time.
-    const guarded = guardEdit(before, next, parsedFor === before ? references : parse(before));
+    const guarded = guardEdit(
+      beforeShown,
+      next,
+      inField(parsedFor === before ? references : parse(before), beforeShown),
+    );
     if (guarded.kind === 'remove') {
       // The core answers with the text minus the whole reference; until then the field shows
       // what it had (the nonce re-renders it over the half-deleted pill).
@@ -133,9 +144,10 @@ export const ComposerInput = forwardRef<
       setNonce((value) => value + 1);
       return;
     }
-    const value = guarded.kind === 'rewrite' ? guarded.text : next;
-    const edit = diffEdit(before, value);
+    const typed = guarded.kind === 'rewrite' ? guarded.text : next;
+    const edit = diffEdit(beforeShown, typed);
     const caret = guarded.kind === 'rewrite' ? guarded.caret : edit.start + edit.inserted.length;
+    const value = joinImages(typed, split.images);
     textRef.current = value;
     setText(value);
     onTextChange(value);
@@ -182,13 +194,13 @@ export const ComposerInput = forwardRef<
       );
       cursor = reference.end;
     });
-    if (cursor < text.length) parts.push(text.slice(cursor));
+    if (cursor < shown.length) parts.push(shown.slice(cursor));
     return parts;
-  }, [P, hidden, live, styles, text]);
+  }, [P, hidden, live, shown, styles, text]);
 
   // A TextInput wraps its placeholder and cannot truncate it, so the collapsed field draws the
   // placeholder's first line itself, cut to one line with an ellipsis.
-  const collapsedHint = collapsed && text.length === 0 ? (placeholder.split('\n')[0] ?? '') : null;
+  const collapsedHint = collapsed && shown.length === 0 ? (placeholder.split('\n')[0] ?? '') : null;
   const field_ = (
     <GhostexImageIntakeView onImages={onImages}>
       <TextInput
@@ -196,7 +208,7 @@ export const ComposerInput = forwardRef<
         accessibilityLabel="Message composer"
         multiline
         scrollEnabled
-        {...(children === null ? { value: text } : {})}
+        {...(children === null ? { value: shown } : {})}
         {...(forced !== undefined ? { selection: forced } : {})}
         onChangeText={onChangeText}
         onSelectionChange={onSelectionChange}

@@ -22,6 +22,7 @@ export function AttachmentPreviews({
   draft,
   active,
   dispatch,
+  onRemoveImage,
 }: {
   references: readonly ComposerReference[];
   pending: number;
@@ -29,6 +30,8 @@ export function AttachmentPreviews({
   draft: string;
   active: string | null;
   dispatch: (action: UserAction) => void;
+  /** Drops a picture by its `[Image #N](path)` source; false when it is not one the field hides. */
+  onRemoveImage?: (source: string) => boolean;
 }) {
   const styles = useStyles();
   const P = useTranscriptTheme();
@@ -77,7 +80,10 @@ export function AttachmentPreviews({
               accessibilityRole="button"
               accessibilityLabel="Remove image"
               hitSlop={8}
-              onPress={() => dispatch({ type: 'removeAttachment', text: draft, start: tile.start, end: tile.end })}
+              onPress={() => {
+                if (onRemoveImage?.(draft.slice(tile.start, tile.end)) === true) return;
+                dispatch({ type: 'removeAttachment', text: draft, start: tile.start, end: tile.end });
+              }}
               style={styles.remove}
             >
               <Glyph name="x" size={10} color={P.foreground} strokeWidth={2.4} />

@@ -49,6 +49,7 @@ import { OptionPills, type PillKind } from './OptionPills';
 import { RunLocationRow } from './RunLocationRow';
 import { themedStyles, useTranscriptTheme } from '../transcript/theme';
 import { QueueList } from './QueueList';
+import { joinImages, splitImages } from './imageTiles';
 import { createDraftReferenceParser } from './references';
 import { SendControl } from './SendControl';
 import { StatusLine, statusLineReserved } from './StatusLine';
@@ -155,7 +156,11 @@ export function NativeComposer({
   const dictation = useDictation(
     chat.machine,
     // An unfocused field has no caret the reader chose: dictation goes after the draft.
-    () => (fieldFocused.current ? draftAt.current : { text: draftAt.current.text, caret: draftAt.current.text.length }),
+    // The pictures sit after the typed text, out of the field (`imageTiles.ts`): "after the draft" is after the typed text.
+    () =>
+      fieldFocused.current
+        ? draftAt.current
+        : { text: draftAt.current.text, caret: splitImages(draftAt.current.text, 0).visible.length },
     (draft) => input?.replace(draft),
     (message) => onHostAction?.('toast', { message, level: 'error' }),
   );
@@ -181,9 +186,30 @@ export function NativeComposer({
   );
   const references = useMemo(() => parseDraftReferences(text), [text, parseDraftReferences]);
   const activeImage = useMemo(() => {
-    const reference = references.find((entry) => entry.kind === 'image' && caret >= entry.start && caret <= entry.end);
+    // Only a picture in the field can hold the caret; the hidden ones sit after it (`imageTiles.ts`).
+    const shown = splitImages(text, 0).visible.length;
+    const reference = references.find(
+      (entry) => entry.kind === 'image' && entry.end <= shown && caret >= entry.start && caret <= entry.end,
+    );
     return reference?.path ?? null;
-  }, [references, caret]);
+  }, [references, caret, text]);
+  /**
+   * A tile's ×: the draft rebuilt from the field's text and the other pictures, which also drops
+   * the hidden blank line with the last one; the caret goes to the end of the typed text (desktop
+   * `attachment_previews.rs` `remove_composer_attachment`).
+   */
+  const removeImage = useCallback(
+    (source: string): boolean => {
+      if (input === null || input === undefined || model === null) return false;
+      const split = splitImages(model.text, 0);
+      const index = split.images.indexOf(source);
+      if (index < 0) return false;
+      const images = split.images.filter((_, at) => at !== index);
+      input.replace(joinImages(split.visible, images));
+      return true;
+    },
+    [input, model],
+  );
 
   // ---- the toolbar's overflow fit, measured like desktop's `composer_measurement` ----------------
 
@@ -545,6 +571,7 @@ export function NativeComposer({
               draft={text}
               active={activeImage}
               dispatch={dispatch}
+              onRemoveImage={removeImage}
             />
           ) : null}
           {document !== null ? <QueueList document={document} dispatch={dispatch} /> : null}

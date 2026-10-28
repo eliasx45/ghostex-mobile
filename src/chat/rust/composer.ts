@@ -15,6 +15,7 @@
 import type { ChatDocument } from './document';
 import { nextDraftVersion, randomUuid } from './host-records';
 import type { UserAction } from './actions';
+import { canonicalDraft, imagesFirst } from '../native/composer/imageTiles';
 
 /** What a submission does; `interrupt` is Interrupt & Send. */
 export type SubmitMode = 'send' | 'queue' | 'compact' | 'handoff' | 'interrupt';
@@ -139,7 +140,9 @@ export class ComposerModel {
     }
     const submission = {
       type: mode,
-      text: this.state.text,
+      // The pictures go first, as a picture pasted before typing always did; the draft only kept
+      // them after the typed text so the field could hide them (`imageTiles.ts`).
+      text: imagesFirst(this.state.text),
       draftVersion: this.version(),
       ...(interrupt ? { interrupt } : {}),
     } as UserAction;
@@ -165,7 +168,11 @@ export class ComposerModel {
     const typedBeforeReady = this.state.revision > 0 ? this.state.text : null;
     const restored =
       entry.parked === true || entry.submitted === true ? '' : typeof entry.text === 'string' ? entry.text : '';
-    const text = typedBeforeReady === null ? restored : `${restored}${typedBeforeReady}`;
+    // Pictures sit after the typed text, where the field does not show them (`imageTiles.ts`).
+    const text = canonicalDraft(
+      typedBeforeReady === null ? restored : `${restored}${typedBeforeReady}`,
+      0,
+    ).text;
     this.set({
       clientId: typeof read.clientId === 'string' ? read.clientId : '',
       draftId: typeof version.draftId === 'string' ? version.draftId : nextDraftVersion().draftId,
@@ -185,11 +192,14 @@ export class ComposerModel {
   }
 
   /** `setComposerText` (desktop's `replace_draft`). */
-  replace(content: string, caret: number | null, fromHistory: boolean, preserveError = false): void {
+  replace(incoming: string, caret: number | null, fromHistory: boolean, preserveError = false): void {
+    // CDXC:SessionChat 2026-10-28 DECISION: Elias: "No need to have the sort of image text here. We already have the image. No need to have the image as well in the text. Fix it." ("Yes, phone too"). A picture the core put anywhere in the draft moves behind the typed text, where the field does not show it; the tile above the field is the picture (`imageTiles.ts`).
+    const canonical = canonicalDraft(incoming, caret ?? incoming.length);
+    const content = canonical.text;
     this.set({
       text: content,
       revision: this.state.revision + 1,
-      caret: caret ?? content.length,
+      caret: canonical.caret,
       fromHistory,
       replaceSequence: this.state.replaceSequence + 1,
     });
@@ -248,7 +258,7 @@ export class ComposerModel {
     if (params.previous !== this.state.text) return;
     const version = (params.version ?? {}) as { draftId?: unknown; revision?: unknown };
     this.set({
-      text: typeof params.content === 'string' ? params.content : '',
+      text: canonicalDraft(typeof params.content === 'string' ? params.content : '', 0).text,
       draftId: typeof version.draftId === 'string' ? version.draftId : this.state.draftId,
       revision: typeof version.revision === 'number' ? version.revision : 1,
       caret: null,
