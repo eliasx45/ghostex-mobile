@@ -11,9 +11,16 @@
  * pressing and holding the card shows the whole label in a bubble above it, as hovering does on the
  * desktop, without changing the card's height. The armed Delayed Send / Close After Done timers come
  * from the app shell, not the document (desktop's `armed_actions`); a tap opens Delayed Actions.
+ *
+ * CDXC:SessionChat 2026-10-29 DECISION (gx-chat-core extras/working_card.rs): Elias, of the capsule:
+ * "i dont like the fact that this is big here, lets make it like the actual claude code desktop app
+ * has". The card is Claude Code desktop's turn status line: no edge, no fill, no rounding, starting at
+ * the rows' left edge; body text 13/19 in the muted ink, then "·" with 4 either side and the elapsed
+ * time in tabular figures (`workingSinceMs`). The pills stay small pills on its right. Supersedes the
+ * 2026-10-20 capsule here (the phone has no Ghostex/Claude look switch, so it always draws the line).
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import type { ChatDocument, WorkingCard as WorkingCardValue } from '../../rust/document';
@@ -32,7 +39,6 @@ import { ProgressTrack, VISUAL, WorkingSpark, type ArmedAction } from './Working
 const ROW_MAX_WIDTH = 768;
 /** How far the lone scroll-to-bottom pill sits above the transcript's bottom edge (desktop `transcript_layout.rs`). */
 const END_PADDING = 16;
-const HEADER_PAD_Y = 6;
 
 /**
  * The gap between the card's bottom edge and the chat box's top edge when nothing stacks between
@@ -123,6 +129,9 @@ export function WorkingCard({
               >
                 {label}
               </Text>
+            ) : null}
+            {card.labelKind !== 'activity' && typeof card.workingSinceMs === 'number' ? (
+              <TurnClock since={card.workingSinceMs} />
             ) : null}
             {card.labelKind === 'activity' ? <ActivityTrailing activity={obj(card.activity)} /> : null}
           </View>
@@ -239,6 +248,33 @@ function Lead({ card }: { card: WorkingCardValue }) {
   return card.working ? <WorkingSpark /> : null;
 }
 
+/** "1h 2m 3s", "2m 3s" or "3s" (gx-chat-core `format_activity_elapsed`). */
+function formatElapsed(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${rest}s`;
+  if (minutes > 0) return `${minutes}m ${rest}s`;
+  return `${rest}s`;
+}
+
+/** Claude's "· 12s" after the label (`turn_status.separator`, `turn_status.elapsed`), ticking each second. */
+function TurnClock({ since }: { since: number }) {
+  const styles = useStyles();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <View style={styles.clock}>
+      <Text style={[styles.clockText, styles.separator]}>{'\u00b7'}</Text>
+      <Text style={styles.clockText}>{formatElapsed((now - since) / 1000)}</Text>
+    </View>
+  );
+}
+
 /** A live activity's progress track, clock, tokens and percent after its label (compaction). */
 function ActivityTrailing({ activity }: { activity: Record<string, unknown> | null }) {
   const styles = useStyles();
@@ -285,27 +321,18 @@ const useStyles = themedStyles((P) => ({
     maxWidth: ROW_MAX_WIDTH,
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    paddingHorizontal: 12 + 10,
+    paddingHorizontal: 12,
   },
+  /** Claude Code's turn status line: no edge, no fill, a pill high (2026-10-29). */
   card: {
-    minHeight: VISUAL.minHeight + HEADER_PAD_Y * 2,
-    paddingLeft: 12,
-    // The pills' scroll row reaches the capsule's right edge (its content brings the 10 of padding),
-    // so a scrolled pill is cut by the rounded edge, not by a straight line inside it.
+    minHeight: VISUAL.minHeight,
+    paddingLeft: 0,
     paddingRight: 0,
-    paddingTop: HEADER_PAD_Y,
-    paddingBottom: HEADER_PAD_Y,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: VISUAL.gap,
-    borderWidth: 1,
-    borderColor: P.inputBorder,
-    // A capsule, like the pills it carries (desktop working_card.rs).
-    borderRadius: 999,
-    // The pills scroll sideways when they don't fit; nothing may spill past the rounded edge.
+    gap: 6,
+    // The pills scroll sideways when they don't fit; nothing spills past the line's right end.
     overflow: 'hidden',
-    // The composer's own fill, so the card and the chat box under it always match.
-    backgroundColor: P.composerBackground,
   },
   /** The whole label while the card is held, above the card, so the card keeps its height. */
   bubble: {
@@ -339,17 +366,34 @@ const useStyles = themedStyles((P) => ({
     alignItems: 'center',
     gap: VISUAL.gap,
   },
+  /** Claude's body text (13/19) in the muted ink, whatever the label names (2026-10-29). */
   label: {
     flexShrink: 1,
     color: P.muted,
-    fontSize: VISUAL.fontSize,
-    lineHeight: VISUAL.fontSize * 1.5,
+    fontSize: 13,
+    lineHeight: 19,
   },
   labelStrong: {
     flexShrink: 1,
-    color: P.foreground,
+    color: P.muted,
     fontSize: 13,
-    lineHeight: 19.5,
+    lineHeight: 19,
+  },
+  /** "·" with 4 either side, then the time in tabular figures, muted; right after the label. */
+  clock: {
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: -VISUAL.gap,
+  },
+  separator: {
+    paddingHorizontal: 4,
+  },
+  clockText: {
+    color: P.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    fontVariant: ['tabular-nums'],
   },
   numbers: {
     flexShrink: 0,
@@ -375,7 +419,6 @@ const useStyles = themedStyles((P) => ({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingRight: 10,
   },
   armed: {
     flexDirection: 'row',

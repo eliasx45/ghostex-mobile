@@ -872,6 +872,8 @@ export type WorkingCard = {
   activity: Json;
   /** The pill ids (`chatPills`) on the card, in order. */
   pills: string[];
+  /** When the working run began (ms since the epoch) while the agent works: the "· 12s" clock. */
+  workingSinceMs?: number | null;
   ariaLabel: string;
 };
 
